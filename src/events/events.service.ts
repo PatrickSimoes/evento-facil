@@ -3,8 +3,7 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EventEntity } from './entities/event.entity';
-import { User } from 'src/user/entities/user.entity';
+import { EventEntity, EventStatus } from './entities/event.entity';
 import { AuthService } from 'src/auth/auth.service';
 
 @Injectable()
@@ -42,34 +41,42 @@ export class EventsService {
       const events = await this.eventRepository.find({ where: { isPublic: true } });
 
       this.logger.log(`Fetched ${events.length} events`);
+      const updatedEvents = await this.updateExpiredEvents(events);
 
-      return events;
+      return updatedEvents;
     } catch (error) {
       this.logger.error('Error fetching events', error.stack);
       throw new InternalServerErrorException('Error fetching events');
     }
   }
 
-  async findEventsByUser(user: User): Promise<EventEntity[]> {
+
+  async findEventsByUser(id: string): Promise<EventEntity[]> {
     try {
-      const events = await this.eventRepository.find({ where: { userId: user.id } });
-      this.logger.log(`Fetched ${events.length} events for user ${user.id}`);
-      return events;
+      const events = await this.eventRepository.find({
+        where: { userId: id },
+        relations: ['user'],
+      }); this.logger.log(`Fetched ${events.length} events for user ${id}`);
+      const updatedEvents = await this.updateExpiredEvents(events);
+
+      return updatedEvents;
     } catch (error) {
-      this.logger.error(`Error fetching events for user ${user.id}`, error.stack);
+      this.logger.error(`Error fetching events for user ${id}, error.stack`);
       throw new InternalServerErrorException('Error fetching user events');
     }
   }
 
   async findOne(id: string): Promise<EventEntity> {
     try {
-      const event = await this.eventRepository.findOne({ where: { id } });
+      const event = await this.eventRepository.findOne({ where: { id }, relations: ['user'] });
       if (!event) {
         this.logger.warn(`Event with id ${id} not found`);
         throw new NotFoundException(`Event with id ${id} not found`);
       }
       this.logger.log(`Event with id ${id} fetched successfully`);
-      return event;
+      const updatedEvents = await this.updateExpiredEvents([event]);
+
+      return { ...updatedEvents[0], userId: event.user.id };
     } catch (error) {
       this.logger.error(`Error fetching event with id ${id}`, error.stack);
       if (error instanceof NotFoundException) throw error;
@@ -96,11 +103,14 @@ export class EventsService {
 
   async remove(id: string): Promise<void> {
     try {
-      const result = await this.eventRepository.delete(id);
-      if (result.affected === 0) {
-        this.logger.warn(`Event with id ${id} not found for deletion`);
+      const event = await this.eventRepository.findOne({ where: { id } });
+
+      if (!event) {
         throw new NotFoundException(`Event with id ${id} not found`);
       }
+
+      await this.eventRepository.softRemove(event);
+
       this.logger.log(`Event ${id} deleted successfully`);
     } catch (error) {
       this.logger.error(`Error deleting event with id ${id}`, error.stack);
@@ -108,4 +118,20 @@ export class EventsService {
       throw new InternalServerErrorException('Error deleting event');
     }
   }
+
+  private async updateExpiredEvents(events: EventEntity[]): Promise<EventEntity[]> {
+    const now = new Date();
+
+    const updatedEvents = events.map(event => {
+      if (event.date < now && event.status !== EventStatus.COMPLETED) {
+        event.status = EventStatus.COMPLETED;
+      }
+      return event;
+    });
+
+    await this.eventRepository.save(updatedEvents);
+    return updatedEvents;
+  }
+
 }
+

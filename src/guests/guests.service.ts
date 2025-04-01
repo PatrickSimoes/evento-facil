@@ -4,7 +4,6 @@ import { Repository } from 'typeorm';
 import { Guest } from './entities/guest.entity';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
-import { error } from 'console';
 
 @Injectable()
 export class GuestsService {
@@ -55,19 +54,20 @@ export class GuestsService {
     }
   }
 
-  async findAllByEvent(id: string): Promise<{ total: number; message: string }> {
+  async findAllByEvent(id: string): Promise<{ total: number; message: string, guests: Guest[] }> {
     try {
       const guests = await this.guestRepository.find({
         where: { eventId: id },
       });
 
       const total = guests.length;
-      
+
       this.logger.log(`Fetched ${total} guests for event ${id}`);
 
       return {
         total,
         message: `Found ${total} guests for event ${id}.`,
+        guests
       };
     } catch (error) {
       this.logger.error(`Error fetching guests for event ${id}`, error.stack);
@@ -110,11 +110,16 @@ export class GuestsService {
 
   async remove(id: string): Promise<void> {
     try {
-      const result = await this.guestRepository.delete(id);
-      if (result.affected === 0) {
+      const guest = await this.guestRepository.findOne({ where: { id } });
+
+      if (!guest) {
         this.logger.warn(`Guest with id ${id} not found for deletion`);
+
         throw new NotFoundException(`Guest with id ${id} not found`);
       }
+
+      await this.guestRepository.softDelete(guest);
+
       this.logger.log(`Guest with id ${id} deleted successfully`);
     } catch (error) {
       this.logger.error(`Error deleting guest with id ${id}`, error.stack);
